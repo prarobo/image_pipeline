@@ -39,7 +39,7 @@ import os
 import rospy
 from camera_calibration.camera_calibrator import OpenCVCalibrationNode
 from camera_calibration.calibrator import ChessboardInfo, Patterns
-from cv_interface import CvInterface
+from camera_calibration.cv_interface import CvInterface
 from message_filters import ApproximateTimeSynchronizer
 
 
