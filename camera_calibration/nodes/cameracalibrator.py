@@ -39,6 +39,7 @@ import os
 import rospy
 from camera_calibration.camera_calibrator import OpenCVCalibrationNode
 from camera_calibration.calibrator import ChessboardInfo, Patterns
+from cv_interface import CvInterface
 from message_filters import ApproximateTimeSynchronizer
 
 
@@ -49,6 +50,9 @@ def main():
     parser.add_option("-c", "--camera_name",
                      type="string", default='narrow_stereo',
                      help="name of the camera to appear in the calibration file")
+    parser.add_option("-m", "--calibration_model",
+                     type="string", default='pinhole',
+                     help="Type of camera being used (supported types are pinhole and fisheye), defaults to pinhole")
     group = OptionGroup(parser, "Chessboard Options",
                         "You must specify one or more chessboards as pairs of --size and --square options.")
     group.add_option("-p", "--pattern",
@@ -104,29 +108,8 @@ def main():
     else:
         sync = functools.partial(ApproximateTimeSynchronizer, slop=options.approximate)
 
-    num_ks = options.k_coefficients
-
-    calib_flags = 0
-    if options.fix_principal_point:
-        calib_flags |= cv2.CALIB_FIX_PRINCIPAL_POINT
-    if options.fix_aspect_ratio:
-        calib_flags |= cv2.CALIB_FIX_ASPECT_RATIO
-    if options.zero_tangent_dist:
-        calib_flags |= cv2.CALIB_ZERO_TANGENT_DIST
-    if (num_ks > 3):
-        calib_flags |= cv2.CALIB_RATIONAL_MODEL
-    if (num_ks < 6):
-        calib_flags |= cv2.CALIB_FIX_K6
-    if (num_ks < 5):
-        calib_flags |= cv2.CALIB_FIX_K5
-    if (num_ks < 4):
-        calib_flags |= cv2.CALIB_FIX_K4
-    if (num_ks < 3):
-        calib_flags |= cv2.CALIB_FIX_K3
-    if (num_ks < 2):
-        calib_flags |= cv2.CALIB_FIX_K2
-    if (num_ks < 1):
-        calib_flags |= cv2.CALIB_FIX_K1
+    cv_interface_obj = CvInterface(calibration_model=options.calibration_model)
+    calib_flags = cv_interface_obj.setupCalibFlags(options)
 
     pattern = Patterns.Chessboard
     if options.pattern == 'circles':
@@ -141,9 +124,16 @@ def main():
     else:
         checkerboard_flags = cv2.CALIB_CB_FAST_CHECK
 
+    # Check the calibration model provided is valid
+    if not (options.calibration_model == 'pinhole' or options.calibration_model == 'fisheye'):
+        print('Unrecognized calibration model, defaulting to pinhole model')
+        calibration_model = 'pinhole'
+    else:
+        calibration_model = options.calibration_model
+
     rospy.init_node('cameracalibrator')
     node = OpenCVCalibrationNode(boards, options.service_check, sync, calib_flags, pattern, options.camera_name,
-                                 checkerboard_flags=checkerboard_flags)
+                                 checkerboard_flags=checkerboard_flags, calibration_model=calibration_model)
     rospy.spin()
 
 if __name__ == "__main__":

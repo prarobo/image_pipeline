@@ -37,7 +37,7 @@ try:
 except ImportError:
     from io import StringIO
 from io import BytesIO
-import cv2
+from cv_interface import CvInterface
 import cv_bridge
 import image_geometry
 import math
@@ -47,7 +47,6 @@ import random
 import sensor_msgs.msg
 import tarfile
 import time
-from distutils.version import LooseVersion
 
 
 # Supported calibration patterns
@@ -218,7 +217,8 @@ class Calibrator(object):
     """
     Base class for calibration system
     """
-    def __init__(self, boards, flags=0, pattern=Patterns.Chessboard, name='', checkerboard_flags=cv2.CALIB_CB_FAST_CHECK):
+    def __init__(self, boards, flags=0, pattern=Patterns.Chessboard, name='', 
+                 checkerboard_flags=cv2.CALIB_CB_FAST_CHECK, calibration_model='pinhole'):
         # Ordering the dimensions for the different detectors is actually a minefield...
         if pattern == Patterns.Chessboard:
             # Make sure n_cols > n_rows to agree with OpenCV CB detector output
@@ -247,6 +247,9 @@ class Calibrator(object):
         self.goodenough = False
         self.param_ranges = [0.7, 0.7, 0.4, 0.5]
         self.name = name
+
+        # Create calibration interface object
+        self.cv_interface_obj = CvInterface(calibration_model='pinhole')
 
     def mkgray(self, msg):
         """
@@ -565,6 +568,8 @@ class MonoCalibrator(Calibrator):
     def __init__(self, *args, **kwargs):
         if 'name' not in kwargs:
             kwargs['name'] = 'narrow_stereo/left'
+        if 'calibration_model' not in kwargs:
+            kwargs['calibration_model'] = 'pinhole'
         super(MonoCalibrator, self).__init__(*args, **kwargs)
 
     def cal(self, images):
@@ -612,11 +617,10 @@ class MonoCalibrator(Calibrator):
         # If FIX_ASPECT_RATIO flag set, enforce focal lengths have 1/1 ratio
         self.intrinsics[0,0] = 1.0
         self.intrinsics[1,1] = 1.0
-        cv2.calibrateCamera(
-                   opts, ipts,
-                   self.size, self.intrinsics,
-                   self.distortion,
-                   flags = self.calib_flags)
+        cv_interface_obj.calibrateCamera(opts, ipts,
+                                         self.size, self.intrinsics,
+                                         self.distortion,
+                                         flags = self.calib_flags)
 
         # R is identity matrix for monocular calibration
         self.R = numpy.eye(3, dtype=numpy.float64)
@@ -639,7 +643,7 @@ class MonoCalibrator(Calibrator):
         for j in range(3):
             for i in range(3):
                 self.P[j,i] = ncm[j, i]
-        self.mapx, self.mapy = cv2.initUndistortRectifyMap(self.intrinsics, self.distortion, self.R, ncm, self.size, cv2.CV_32FC1)
+        self.mapx, self.mapy = cv_interface_obj.initUndistortRectifyMap(self.intrinsics, self.distortion, self.R, ncm, self.size, cv2.CV_32FC1)
 
     def remap(self, src):
         """
@@ -657,8 +661,7 @@ class MonoCalibrator(Calibrator):
 
         Apply the post-calibration undistortion to the source points
         """
-
-        return cv2.undistortPoints(src, self.intrinsics, self.distortion, R = self.R, P = self.P)
+        return cv_interface_obj.undistortPoints(src, self.intrinsics, self.distortion, R = self.R, P = self.P)
 
     def as_message(self):
         """ Return the camera calibration as a CameraInfo message """
@@ -893,23 +896,14 @@ class StereoCalibrator(Calibrator):
 
         self.T = numpy.zeros((3, 1), dtype=numpy.float64)
         self.R = numpy.eye(3, dtype=numpy.float64)
-        if LooseVersion(cv2.__version__).version[0] == 2:
-            cv2.stereoCalibrate(opts, lipts, ripts, self.size,
-                               self.l.intrinsics, self.l.distortion,
-                               self.r.intrinsics, self.r.distortion,
-                               self.R,                            # R
-                               self.T,                            # T
-                               criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 1, 1e-5),
-                               flags = flags)
-        else:
-            cv2.stereoCalibrate(opts, lipts, ripts,
-                               self.l.intrinsics, self.l.distortion,
-                               self.r.intrinsics, self.r.distortion,
-                               self.size,
-                               self.R,                            # R
-                               self.T,                            # T
-                               criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 1, 1e-5),
-                               flags = flags)
+
+        cv_interface_obj.stereoCalibrate(opts, lipts, ripts, self.size,
+                                         self.l.intrinsics, self.l.distortion,
+                                         self.r.intrinsics, self.r.distortion,
+                                         self.R,                            # R
+                                         self.T,                            # T
+                                         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 1, 1e-5),
+                                         flags = flags)
 
         self.set_alpha(0.0)
 
@@ -920,21 +914,22 @@ class StereoCalibrator(Calibrator):
         in calibrated image are valid) to 1 (zoomed out, all pixels in
         original image are in calibrated image).
         """
-
-        cv2.stereoRectify(self.l.intrinsics,
-                         self.l.distortion,
-                         self.r.intrinsics,
-                         self.r.distortion,
-                         self.size,
-                         self.R,
-                         self.T,
-                         self.l.R, self.r.R, self.l.P, self.r.P,
-                         alpha = a)
+        cv_interface_obj.stereoRectify(self.l.intrinsics,
+                                       self.l.distortion,
+                                       self.r.intrinsics,
+                                       self.r.distortion,
+                                       self.size,
+                                       self.R,
+                                       self.T,
+                                       self.l.R, self.r.R, self.l.P, self.r.P,
+                                       alpha = a)
         
-        cv2.initUndistortRectifyMap(self.l.intrinsics, self.l.distortion, self.l.R, self.l.P, self.size, cv2.CV_32FC1,
-                                   self.l.mapx, self.l.mapy)
-        cv2.initUndistortRectifyMap(self.r.intrinsics, self.r.distortion, self.r.R, self.r.P, self.size, cv2.CV_32FC1,
-                                   self.r.mapx, self.r.mapy)
+        cv_interface_obj.initUndistortRectifyMap(self.l.intrinsics, self.l.distortion, 
+                                                 self.l.R, self.l.P, self.size, cv2.CV_32FC1,
+                                                 self.l.mapx, self.l.mapy)
+        cv_interface_obj.initUndistortRectifyMap(self.r.intrinsics, self.r.distortion, 
+                                                 self.r.R, self.r.P, self.size, cv2.CV_32FC1,
+                                                 self.r.mapx, self.r.mapy)
 
     def as_message(self):
         """
